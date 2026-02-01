@@ -2,8 +2,10 @@ package com.tibolatte.greeny;
 
 import com.mojang.logging.LogUtils;
 import com.tibolatte.greeny.registry.*;
+import com.tibolatte.greeny.worldgen.GreenyRegion;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
@@ -28,6 +30,7 @@ import net.minecraftforge.registries.DeferredRegister;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 import org.slf4j.Logger;
+import terrablender.api.Regions;
 
 @Mod(Greeny.MODID)
 public class Greeny {
@@ -47,6 +50,16 @@ public class Greeny {
         MobEffectRegistry.EFFECTS.register(modEventBus);
         // Inside your Greeny() constructor:
         EntityRegistry.ENTITIES.register(modEventBus);
+        modEventBus.addListener(this::commonSetup);
+
+    }
+
+    private void commonSetup(final FMLCommonSetupEvent event) {
+        event.enqueueWork(() -> {
+            // On enregistre notre région.
+            // Le poids "10" signifie qu'il sera assez fréquent.
+            Regions.register(new GreenyRegion(new ResourceLocation(MODID, "axiom_region"), 10));
+        });
     }
 }
 
