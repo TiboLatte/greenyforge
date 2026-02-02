@@ -2,8 +2,7 @@ package com.tibolatte.greeny.blocks.entity;
 
 import com.tibolatte.greeny.blocks.AxiomHeartBlock;
 import com.tibolatte.greeny.blocks.HeartState;
-import com.tibolatte.greeny.mobs.*;
-
+import com.tibolatte.greeny.mobs.AxiomGuardianEntity;
 import com.tibolatte.greeny.registry.BlockEntityRegistry;
 import com.tibolatte.greeny.registry.EntityRegistry;
 import com.tibolatte.greeny.registry.MobEffectRegistry;
@@ -26,7 +25,7 @@ import team.lodestar.lodestone.systems.particle.data.GenericParticleData;
 import team.lodestar.lodestone.systems.particle.data.color.ColorParticleData;
 import team.lodestar.lodestone.systems.screenshake.ScreenshakeInstance;
 
-import java.awt.*;
+import java.awt.Color; // FIX: Specific import only
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,19 +37,16 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     //               GAMEPLAY CONFIGURATION
     // =============================================================
 
-    // TIMINGS
-    private static final int PULSE_LOOP_SPEED = 5 * 20;       // Green Pulse frequency (5s)
-    private static final int ANGER_BUILDUP_TIME = 4 * 20;      // Warning time before boom (4s)
-    private static final int ANGER_REFRACTORY_TIME = 20 * 20;  // Cooldown after boom (20s)
-    private static final int SHUTDOWN_COOLDOWN_TIME = 600 * 20; // Sleep time if dead (10 mins)
+    private static final int PULSE_LOOP_SPEED = 5 * 20;       // 5s Pulse
+    private static final int ANGER_BUILDUP_TIME = 4 * 20;     // 4s Warning
+    private static final int ANGER_REFRACTORY_TIME = 20 * 20; // 20s Angry state
+    private static final int SHUTDOWN_COOLDOWN_TIME = 600 * 20; // 10 mins Dead
 
-    // MECHANICS
-    private static final int MAX_ANGER_STRIKES = 3;           // How many times before it dies?
-    private static final float SCORE_GAIN_PER_TICK = 0.015f;  // Attunement gain speed
-    private static final float SCORE_DECAY_PER_TICK = 0.05f;  // Attunement loss speed
-    private static final float SCORE_PUNISHMENT = 0.1f;       // Instant loss for bad behavior
+    private static final int MAX_ANGER_STRIKES = 3;
+    private static final float SCORE_GAIN_PER_TICK = 0.015f;
+    private static final float SCORE_DECAY_PER_TICK = 0.05f;
+    private static final float SCORE_PUNISHMENT = 0.1f;
 
-    // PHYSICS
     private static final double DETECTION_RADIUS = 20.0;
     private static final double KNOCKBACK_HORIZONTAL = 1.8;
     private static final double KNOCKBACK_VERTICAL = 1.3;
@@ -59,16 +55,15 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     //               STATE VARIABLES
     // =============================================================
 
-    // Standard Logic
     private int pulseTicks = 0;
     private int angerTicks = 0;
     private boolean hasExplodedThisCycle = false;
 
-    // Shutdown Logic
-    private int angerStrikes = 0;  // Counts strikes (0 to 3)
-    private int shutdownTimer = 0; // Counts down if dead
+    // Logic Tracking
+    private int angerStrikes = 0;
+    private int shutdownTimer = 0;
+    private long lastStrikeTime = 0; // Anti-spam timer
 
-    // Resonance (Attunement)
     private final Map<UUID, Float> serverResonance = new HashMap<>();
     private final Map<UUID, Float> clientResonance = new HashMap<>();
 
@@ -77,60 +72,63 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     }
 
     // =============================================================
-    //                  CORE LOGIC
+    //                  CORE TICK LOGIC
     // =============================================================
 
     public static void tick(Level level, BlockPos pos, BlockState state, AxiomHeartBlockEntity blockEntity) {
 
-        // 1. SHUTDOWN STATE (Priority)
-        if (blockEntity.shutdownTimer > 0) {
-            blockEntity.shutdownTimer--;
-
-            // Wake up if timer hits 0
-            if (blockEntity.shutdownTimer == 0) {
+        // 1. DORMANT CHECK (ABSOLUTE PRIORITY)
+        if (state.getValue(AxiomHeartBlock.STATE) == HeartState.DORMANT || blockEntity.shutdownTimer > 0) {
+            if (blockEntity.shutdownTimer > 0) {
+                blockEntity.shutdownTimer--;
+            } else {
+                // Timer finished? Wake up.
                 blockEntity.resetToActive();
             }
-            return; // Stop all other logic while dormant
+            return;
         }
 
-        // 2. TICKERS
+        // 2. TIMERS
         if (blockEntity.hasExplodedThisCycle && blockEntity.angerTicks > 0) {
-            // Wait for silence
+            // Silence phase (Post-Explosion)
             blockEntity.pulseTicks = 0;
         } else {
-            // Pulse normally
+            // Normal Pulse phase
             blockEntity.pulseTicks++;
         }
 
         if (blockEntity.angerTicks > 0) blockEntity.angerTicks--;
         boolean isAngry = blockEntity.angerTicks > 0;
 
-        // 3. STATE MANAGEMENT (Visuals)
-        // If anger just ended, reset to normal
+        // 3. VISUAL SYNC
         if (!isAngry && blockEntity.hasExplodedThisCycle) {
             blockEntity.hasExplodedThisCycle = false;
-            if (state.getValue(AxiomHeartBlock.STATE) == HeartState.ANGRY) {
+            if (blockEntity.shutdownTimer <= 0 && state.getValue(AxiomHeartBlock.STATE) == HeartState.ANGRY) {
                 blockEntity.updateBlockState(HeartState.ACTIVE);
             }
         }
 
         // 4. ANGER SEQUENCE
         if (isAngry) {
-            // A. Shake Screen (Warning)
-            if (level.isClientSide && blockEntity.pulseTicks == PULSE_LOOP_SPEED + 1) {
-                ScreenshakeHandler.addScreenshake(new ScreenshakeInstance(ANGER_BUILDUP_TIME)
-                        .setIntensity(0.2f, 1.5f).setEasing(Easing.QUAD_IN));
+            // Ensure state is set to ANGRY
+            if (state.getValue(AxiomHeartBlock.STATE) != HeartState.ANGRY) {
+                blockEntity.updateBlockState(HeartState.ANGRY);
             }
 
-            // B. Particles (Buildup)
-            if (level.isClientSide && blockEntity.pulseTicks >= PULSE_LOOP_SPEED && blockEntity.pulseTicks < PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME) {
-                blockEntity.spawnAngerBuildupParticles(pos, blockEntity.pulseTicks);
+            if (level.isClientSide) {
+                if (blockEntity.pulseTicks == PULSE_LOOP_SPEED + 1) {
+                    ScreenshakeHandler.addScreenshake(new ScreenshakeInstance(ANGER_BUILDUP_TIME)
+                            .setIntensity(0.2f, 1.5f).setEasing(Easing.QUAD_IN));
+                }
+                if (blockEntity.pulseTicks >= PULSE_LOOP_SPEED && blockEntity.pulseTicks < PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME) {
+                    blockEntity.spawnAngerBuildupParticles(pos, blockEntity.pulseTicks);
+                }
             }
 
-            // C. EXPLOSION
+            // EXPLOSION TRIGGER
             if (blockEntity.pulseTicks >= PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME) {
                 blockEntity.pulseTicks = 0;
-                blockEntity.hasExplodedThisCycle = true; // Lock loop
+                blockEntity.hasExplodedThisCycle = true;
 
                 if (level.isClientSide) {
                     blockEntity.spawnAngerShockwave(pos);
@@ -142,6 +140,10 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         }
         // 5. PASSIVE PULSE
         else {
+            if (state.getValue(AxiomHeartBlock.STATE) != HeartState.ACTIVE) {
+                blockEntity.updateBlockState(HeartState.ACTIVE);
+            }
+
             if (blockEntity.pulseTicks >= PULSE_LOOP_SPEED) {
                 blockEntity.pulseTicks = 0;
                 if (level.isClientSide) blockEntity.spawnGreenShockwave(pos);
@@ -149,7 +151,7 @@ public class AxiomHeartBlockEntity extends BlockEntity {
             }
         }
 
-        // 6. VISUAL ANIMATIONS
+        // 6. CONTINUOUS VISUALS
         if (level.isClientSide) {
             blockEntity.animateHeart(level, pos, isAngry);
             if (!isAngry) blockEntity.animatePlayerTethers(level, pos);
@@ -163,39 +165,33 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     // =============================================================
 
     public void triggerAnger() {
-        if (shutdownTimer > 0) return; // Can't anger a dead heart
+        if (level == null || level.isClientSide) return;
+        if (getBlockState().getValue(AxiomHeartBlock.STATE) == HeartState.DORMANT) return;
 
-        // If we are currently "Passive" or "Cooling Down", add a strike
-        // We do NOT add a strike if we are already in the middle of exploding (spam prevention)
-        if (angerTicks <= 0) {
-            this.angerStrikes++;
+        long time = level.getGameTime();
+        if (time - lastStrikeTime < 10) return;
+        lastStrikeTime = time;
 
-            // CHECK SHUTDOWN CONDITION
-            if (this.angerStrikes >= MAX_ANGER_STRIKES) {
-                initiateShutdown();
-                return;
-            }
+        this.angerStrikes++;
+        setChanged();
+
+        if (this.angerStrikes >= MAX_ANGER_STRIKES) {
+            initiateShutdown();
+            return;
         }
 
-        // Start the Anger Cycle
         boolean isBusyExploding = (this.pulseTicks >= PULSE_LOOP_SPEED) &&
                 (this.pulseTicks < PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME);
 
         if (!isBusyExploding) {
-            this.pulseTicks = PULSE_LOOP_SPEED; // Skip to start of buildup
+            this.pulseTicks = PULSE_LOOP_SPEED;
             this.hasExplodedThisCycle = false;
             this.angerTicks = ANGER_BUILDUP_TIME + ANGER_REFRACTORY_TIME;
 
-            // Wipe Attunement progress as punishment
+            updateBlockState(HeartState.ANGRY);
             serverResonance.clear();
-            setChanged();
-
-            updateBlockState(HeartState.ANGRY); // Turn RED
-
-            // Sync
-            if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
         } else {
-            // Just extend the duration if already angry
             this.angerTicks = Math.max(this.angerTicks, ANGER_REFRACTORY_TIME);
         }
     }
@@ -204,19 +200,22 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         this.shutdownTimer = SHUTDOWN_COOLDOWN_TIME;
         this.angerTicks = 0;
         this.pulseTicks = 0;
-        this.angerStrikes = 0; // Reset strikes for when it wakes up
+        this.angerStrikes = 0;
+        this.hasExplodedThisCycle = false;
 
         serverResonance.clear();
         clientResonance.clear();
 
-        updateBlockState(HeartState.DORMANT); // Turn GRAY
+        updateBlockState(HeartState.DORMANT);
 
-        if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        if (level != null) {
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        }
     }
 
     private void resetToActive() {
         this.shutdownTimer = 0;
-        updateBlockState(HeartState.ACTIVE); // Turn BLUE
+        updateBlockState(HeartState.ACTIVE);
     }
 
     private void updateBlockState(HeartState newState) {
@@ -240,9 +239,7 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         for (Player player : players) {
             Vec3 center = new Vec3(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
             Vec3 direction = player.position().subtract(center).normalize();
-
             if (direction.lengthSqr() < 0.0001) direction = new Vec3(0, 1, 0);
-
             player.push(direction.x * KNOCKBACK_HORIZONTAL, KNOCKBACK_VERTICAL, direction.z * KNOCKBACK_HORIZONTAL);
             player.hurtMarked = true;
         }
@@ -295,11 +292,16 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         if (spawnPos == null) spawnPos = findValidSpawnSpot(level, pos);
         if (spawnPos == null) spawnPos = pos.above();
 
-        // Use EntityRegistry.AXIOM_GUARDIAN
+        // FIX: Removed check logic, just used variable directly
         var guardian = EntityRegistry.AXIOM_GUARDIAN.get().create(level);
         if (guardian != null) {
             guardian.moveTo(spawnPos.getX() + 0.5, spawnPos.getY(), spawnPos.getZ() + 0.5, 0.0f, 0.0f);
-            guardian.setSummoned(true);
+
+            // Assume it is the correct class because the Registry says so
+            if (guardian instanceof AxiomGuardianEntity) {
+                ((AxiomGuardianEntity) guardian).setSummoned(true);
+            }
+
             if (targetPlayer != null) guardian.setTarget(targetPlayer);
             level.addFreshEntity(guardian);
         }
@@ -331,20 +333,14 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     @Override
     public CompoundTag getUpdateTag() {
         CompoundTag tag = super.getUpdateTag();
-        tag.putInt("Anger", angerTicks);
-        tag.putInt("Pulse", pulseTicks);
-        tag.putInt("Strikes", angerStrikes);
-        tag.putInt("Shutdown", shutdownTimer);
+        saveAdditional(tag);
         return tag;
     }
 
     @Override
     public void handleUpdateTag(CompoundTag tag) {
         super.handleUpdateTag(tag);
-        this.angerTicks = tag.getInt("Anger");
-        this.pulseTicks = tag.getInt("Pulse");
-        this.angerStrikes = tag.getInt("Strikes");
-        this.shutdownTimer = tag.getInt("Shutdown");
+        load(tag);
     }
 
     @Override
@@ -355,6 +351,24 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     @Override
     public void onDataPacket(net.minecraft.network.Connection net, ClientboundBlockEntityDataPacket pkt) {
         handleUpdateTag(pkt.getTag());
+    }
+
+    @Override
+    protected void saveAdditional(CompoundTag tag) {
+        super.saveAdditional(tag);
+        tag.putInt("Anger", angerTicks);
+        tag.putInt("Pulse", pulseTicks);
+        tag.putInt("Strikes", angerStrikes);
+        tag.putInt("Shutdown", shutdownTimer);
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        super.load(tag);
+        this.angerTicks = tag.getInt("Anger");
+        this.pulseTicks = tag.getInt("Pulse");
+        this.angerStrikes = tag.getInt("Strikes");
+        this.shutdownTimer = tag.getInt("Shutdown");
     }
 
     private boolean isStationary(Player player) {
@@ -378,27 +392,18 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         double cx = pos.getX() + 0.5;
         double cy = pos.getY() + 0.5;
         double cz = pos.getZ() + 0.5;
-        double radius = 3.0 + (ticksUntilBoom * 0.05);
-
-        double theta = level.random.nextDouble() * Math.PI * 2;
-        double phi = level.random.nextDouble() * Math.PI;
-        double ox = Math.sin(phi) * Math.cos(theta) * radius;
-        double oy = Math.cos(phi) * radius;
-        double oz = Math.sin(phi) * Math.sin(theta) * radius;
 
         WorldParticleBuilder.create(ParticleRegistry.STAR_PARTICLE.get())
                 .setColorData(ColorParticleData.create(new Color(100, 0, 0), new Color(0, 0, 0)).build())
                 .setScaleData(GenericParticleData.create(0.2f, 0.0f).build())
                 .setLifetime(ticksUntilBoom)
-                .setMotion(-ox / ticksUntilBoom, -oy / ticksUntilBoom, -oz / ticksUntilBoom)
-                .enableNoClip()
-                .spawn(level, cx + ox, cy + oy, cz + oz);
+                .spawn(level, cx, cy, cz);
 
         if (ticksUntilBoom < 20 && level.random.nextBoolean()) {
             WorldParticleBuilder.create(ParticleRegistry.MANA_WISP.get())
                     .setColorData(ColorParticleData.create(new Color(255, 0, 0), new Color(50, 0, 0)).build())
                     .setScaleData(GenericParticleData.create(0.5f, 0.8f).build())
-                    .setLifetime(2)
+                    .setLifetime(10)
                     .spawn(level, cx, cy, cz);
         }
     }
