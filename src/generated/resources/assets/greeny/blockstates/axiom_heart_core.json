@@ -1,7 +1,13 @@
 {
   "variants": {
-    "": {
-      "model": "greeny:block/axiom_heart_core"
+    "state=active": {
+      "model": "greeny:block/axiom_heart_core_active"
+    },
+    "state=angry": {
+      "model": "greeny:block/axiom_heart_core_active"
+    },
+    "state=dormant": {
+      "model": "greeny:block/axiom_heart_core_dormant"
     }
   }
 }

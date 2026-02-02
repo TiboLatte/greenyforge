@@ -1,3 +1,8 @@
-// 1.20.1	2026-01-31T21:46:13.7100551	Loot Tables
+// 1.20.1	2026-02-02T14:18:36.2244758	Loot Tables
 fcbf539cf57dee719fc6f9313e220fbfb31f64b5 data/greeny/loot_tables/blocks/ancient_root.json
 c4d946b1cd19f781afad7fac3e0be9e0b8f23972 data/greeny/loot_tables/blocks/axiom_heart_core.json
+969083c93cf82236255e51bd04a6749ad5eefe15 data/greeny/loot_tables/blocks/axiom_soil.json
+cd90916e8b936b28ee146cf8eaa45e02201f7f96 data/greeny/loot_tables/blocks/phasing_sprout.json
+75d9713338f039fe6c1044cc8cb591bc45aa4b79 data/greeny/loot_tables/blocks/whispering_oak_leaves.json
+76c397becda6a6facb830aafc42653d5bc6b26ab data/greeny/loot_tables/blocks/whispering_oak_log.json
+a6a7341e959eb7385570e0c6b31f755a0e93f199 data/greeny/loot_tables/blocks/whispering_oak_sapling.json

@@ -13,24 +13,40 @@ import java.util.List;
 import java.util.Set;
 
 public class GreenyLootTableProvider {
-    // This is the method you call in DataGenerators.java
+
     public static LootTableProvider create(PackOutput output) {
         return new LootTableProvider(output, Set.of(), List.of(
-                new LootTableProvider.SubProviderEntry(AzureveilBlockLoot::new, LootContextParamSets.BLOCK)
+                // Renamed from AzureveilBlockLoot to GreenyBlockLoot
+                new LootTableProvider.SubProviderEntry(GreenyBlockLoot::new, LootContextParamSets.BLOCK)
         ));
     }
 
     // Inner class to handle block drops
-    public static class AzureveilBlockLoot extends BlockLootSubProvider {
-        public AzureveilBlockLoot() {
+    public static class GreenyBlockLoot extends BlockLootSubProvider {
+        public GreenyBlockLoot() {
             super(Set.of(), FeatureFlags.REGISTRY.allFlags());
         }
 
         @Override
         protected void generate() {
-            // Drop itself when broken
+            // --- EXISTING ---
             this.dropSelf(BlockRegistry.AXIOM_HEART_CORE.get());
             this.dropSelf(BlockRegistry.ANCIENT_ROOT.get());
+
+            // --- NEW TREE DROPS ---
+
+            // 1. Log drops Log
+            this.dropSelf(BlockRegistry.WHISPERING_OAK_LOG.get());
+
+            // 2. Sapling drops Sapling
+            this.dropSelf(BlockRegistry.WHISPERING_OAK_SAPLING.get());
+
+            // 3. Leaves drop Saplings (standard vanilla rates)
+            this.add(BlockRegistry.WHISPERING_OAK_LEAVES.get(),
+                    block -> createLeavesDrops(block, BlockRegistry.WHISPERING_OAK_SAPLING.get(), NORMAL_LEAVES_SAPLING_CHANCES));
+            this.dropSelf(BlockRegistry.AXIOM_SOIL.get());
+            this.dropSelf(BlockRegistry.PHASING_SPROUT.get());
+
         }
 
         @Override

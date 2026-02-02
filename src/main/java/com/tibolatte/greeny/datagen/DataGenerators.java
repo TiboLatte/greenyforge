@@ -2,6 +2,7 @@ package com.tibolatte.greeny.datagen;
 
 import com.tibolatte.greeny.Greeny;
 import com.tibolatte.greeny.worldgen.GreenyBiomes;
+import com.tibolatte.greeny.worldgen.GreenyPlacedFeatures;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.RegistrySetBuilder;
 import net.minecraft.core.registries.Registries;
@@ -42,5 +43,7 @@ public class DataGenerators {
 
         // This tells the DataGen: "Look in GreenyBiomes.java to find what to generate"
         private static final RegistrySetBuilder BUILDER = new RegistrySetBuilder()
-                .add(Registries.BIOME, GreenyBiomes::bootstrap);
+                .add(Registries.BIOME, GreenyBiomes::bootstrap)
+                .add(Registries.CONFIGURED_FEATURE, GreenyPlacedFeatures::bootstrap)
+                .add(Registries.PLACED_FEATURE, GreenyPlacedFeatures::bootstrapPlaced);
 }

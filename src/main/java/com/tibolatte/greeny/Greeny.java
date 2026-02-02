@@ -3,6 +3,7 @@ package com.tibolatte.greeny;
 import com.mojang.logging.LogUtils;
 import com.tibolatte.greeny.registry.*;
 import com.tibolatte.greeny.worldgen.GreenyRegion;
+import com.tibolatte.greeny.worldgen.tree.GreenyTreeDecorator;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -50,6 +51,7 @@ public class Greeny {
         MobEffectRegistry.EFFECTS.register(modEventBus);
         // Inside your Greeny() constructor:
         EntityRegistry.ENTITIES.register(modEventBus);
+        GreenyTreeDecorator.DECORATOR_TYPES.register(modEventBus);
         modEventBus.addListener(this::commonSetup);
 
     }

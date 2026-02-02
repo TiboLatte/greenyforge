@@ -1,15 +1,18 @@
 package com.tibolatte.greeny.blocks;
 
+import com.tibolatte.greeny.registry.BlockRegistry;
 import com.tibolatte.greeny.registry.MobEffectRegistry;
 import com.tibolatte.greeny.registry.ParticleRegistry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RotatedPillarBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.CollisionContext;
@@ -94,5 +97,47 @@ public class PhasingRootBlock extends RotatedPillarBlock {
     @Override
     public boolean skipRendering(BlockState state, BlockState adjacentBlockState, net.minecraft.core.Direction side) {
         return adjacentBlockState.is(this) ? true : super.skipRendering(state, adjacentBlockState, side);
+    }
+
+    @Override
+    public boolean isRandomlyTicking(BlockState state) {
+        return true;
+    }
+
+    @Override
+    public void randomTick(BlockState state, ServerLevel level, BlockPos pos, RandomSource random) {
+        // LORE: The Root emits seeds/energy that become Sprouts.
+        // 5% chance per tick (Slow spread)
+        if (random.nextInt(20) == 0) {
+
+            // Try to find a valid spot nearby (Radius 2)
+            for (int i = 0; i < 3; i++) {
+                BlockPos targetPos = pos.offset(random.nextInt(5) - 2, random.nextInt(3) - 1, random.nextInt(5) - 2);
+
+                // Validation:
+                // 1. Must be Air
+                // 2. Block below must be valid soil (Grass, Dirt, or Axiom Soil)
+                if (level.isEmptyBlock(targetPos)) {
+                    BlockState belowState = level.getBlockState(targetPos.below());
+
+                    if (belowState.is(Blocks.GRASS_BLOCK) || belowState.is(Blocks.DIRT) || belowState.is(BlockRegistry.AXIOM_SOIL.get())) {
+
+                        // 3. DENSITY CHECK (Crucial for gameplay balance)
+                        // Don't spawn if there are already sprouts nearby. We don't want a weed infestation.
+                        int nearbySprouts = 0;
+                        for (BlockPos p : BlockPos.betweenClosed(pos.offset(-3, -1, -3), pos.offset(3, 1, 3))) {
+                            if (level.getBlockState(p).is(BlockRegistry.PHASING_SPROUT.get())) {
+                                nearbySprouts++;
+                            }
+                        }
+
+                        if (nearbySprouts < 2) { // Only grow if sparse
+                            level.setBlock(targetPos, BlockRegistry.PHASING_SPROUT.get().defaultBlockState(), 3);
+                            break; // Done
+                        }
+                    }
+                }
+            }
+        }
     }
 }

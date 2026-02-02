@@ -65,7 +65,7 @@
     [
       "minecraft:glow_lichen",
       "minecraft:forest_flowers",
-      "minecraft:trees_birch_and_oak"
+      "greeny:whispering_oak_placed"
     ],
     [
       "minecraft:freeze_top_layer"
