@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "greeny:block/axiom_heart_core_active"
+  }
+}
