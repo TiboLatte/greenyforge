@@ -77,30 +77,27 @@ public class AxiomHeartBlockEntity extends BlockEntity {
 
     public static void tick(Level level, BlockPos pos, BlockState state, AxiomHeartBlockEntity blockEntity) {
 
-        // 1. DORMANT CHECK (ABSOLUTE PRIORITY)
+        // 1. DORMANT STATE (Sleep Mode)
         if (state.getValue(AxiomHeartBlock.STATE) == HeartState.DORMANT || blockEntity.shutdownTimer > 0) {
             if (blockEntity.shutdownTimer > 0) {
                 blockEntity.shutdownTimer--;
             } else {
-                // Timer finished? Wake up.
-                blockEntity.resetToActive();
+                blockEntity.resetToActive(); // Wake up
             }
-            return;
+            return; // Don't run animation logic
         }
 
         // 2. TIMERS
         if (blockEntity.hasExplodedThisCycle && blockEntity.angerTicks > 0) {
-            // Silence phase (Post-Explosion)
             blockEntity.pulseTicks = 0;
         } else {
-            // Normal Pulse phase
             blockEntity.pulseTicks++;
         }
 
         if (blockEntity.angerTicks > 0) blockEntity.angerTicks--;
         boolean isAngry = blockEntity.angerTicks > 0;
 
-        // 3. VISUAL SYNC
+        // 3. VISUAL RESET (If anger expired naturally)
         if (!isAngry && blockEntity.hasExplodedThisCycle) {
             blockEntity.hasExplodedThisCycle = false;
             if (blockEntity.shutdownTimer <= 0 && state.getValue(AxiomHeartBlock.STATE) == HeartState.ANGRY) {
@@ -110,31 +107,45 @@ public class AxiomHeartBlockEntity extends BlockEntity {
 
         // 4. ANGER SEQUENCE
         if (isAngry) {
-            // Ensure state is set to ANGRY
+            // Force Red Texture
             if (state.getValue(AxiomHeartBlock.STATE) != HeartState.ANGRY) {
                 blockEntity.updateBlockState(HeartState.ANGRY);
             }
 
+            // --- CLIENT VISUALS (SHAKE FIX) ---
             if (level.isClientSide) {
-                if (blockEntity.pulseTicks == PULSE_LOOP_SPEED + 1) {
-                    ScreenshakeHandler.addScreenshake(new ScreenshakeInstance(ANGER_BUILDUP_TIME)
-                            .setIntensity(0.2f, 1.5f).setEasing(Easing.QUAD_IN));
-                }
+                // 1. BUILDUP PHASE (Rumble)
                 if (blockEntity.pulseTicks >= PULSE_LOOP_SPEED && blockEntity.pulseTicks < PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME) {
+
+                    // FIX: Shake every 0.25s (5 ticks) so it feels like it's charging up
+                    if (blockEntity.pulseTicks % 5 == 0) {
+                        ScreenshakeHandler.addScreenshake(new ScreenshakeInstance(10)
+                                .setIntensity(0.1f, 0.3f).setEasing(Easing.SINE_IN));
+                    }
+
                     blockEntity.spawnAngerBuildupParticles(pos, blockEntity.pulseTicks);
                 }
             }
 
-            // EXPLOSION TRIGGER
+            // 2. EXPLOSION PHASE (Boom)
             if (blockEntity.pulseTicks >= PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME) {
                 blockEntity.pulseTicks = 0;
-                blockEntity.hasExplodedThisCycle = true;
+                blockEntity.hasExplodedThisCycle = true; // Lock animation
 
                 if (level.isClientSide) {
+                    // FIX: Add BIG Shake on explosion
+                    ScreenshakeHandler.addScreenshake(new ScreenshakeInstance(30)
+                            .setIntensity(0.6f, 1.5f).setEasing(Easing.EXPO_OUT));
+
                     blockEntity.spawnAngerShockwave(pos);
                 } else {
                     blockEntity.applyShockwaveKnockback(level, pos);
                     blockEntity.spawnGuardianDefender(level, pos);
+
+                    // CHECK DEATH
+                    if (blockEntity.angerStrikes >= MAX_ANGER_STRIKES) {
+                        blockEntity.initiateShutdown();
+                    }
                 }
             }
         }
@@ -168,22 +179,24 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         if (level == null || level.isClientSide) return;
         if (getBlockState().getValue(AxiomHeartBlock.STATE) == HeartState.DORMANT) return;
 
+        // Anti-Spam
         long time = level.getGameTime();
         if (time - lastStrikeTime < 10) return;
         lastStrikeTime = time;
 
+        // 1. ADD STRIKE
         this.angerStrikes++;
         setChanged();
 
-        if (this.angerStrikes >= MAX_ANGER_STRIKES) {
-            initiateShutdown();
-            return;
-        }
+        // 2. START ANIMATION
+        // We REMOVED the check that stopped the function here.
+        // Now we let the animation flow play out, even if it's the final strike.
 
         boolean isBusyExploding = (this.pulseTicks >= PULSE_LOOP_SPEED) &&
                 (this.pulseTicks < PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME);
 
         if (!isBusyExploding) {
+            // Start Warning Phase
             this.pulseTicks = PULSE_LOOP_SPEED;
             this.hasExplodedThisCycle = false;
             this.angerTicks = ANGER_BUILDUP_TIME + ANGER_REFRACTORY_TIME;
@@ -192,6 +205,7 @@ public class AxiomHeartBlockEntity extends BlockEntity {
             serverResonance.clear();
             level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
         } else {
+            // Already counting down to boom? Just extend the red state.
             this.angerTicks = Math.max(this.angerTicks, ANGER_REFRACTORY_TIME);
         }
     }
@@ -360,6 +374,9 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         tag.putInt("Pulse", pulseTicks);
         tag.putInt("Strikes", angerStrikes);
         tag.putInt("Shutdown", shutdownTimer);
+
+        // CRITICAL FIX: Save animation state
+        tag.putBoolean("Exploded", hasExplodedThisCycle);
     }
 
     @Override
@@ -369,6 +386,9 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         this.pulseTicks = tag.getInt("Pulse");
         this.angerStrikes = tag.getInt("Strikes");
         this.shutdownTimer = tag.getInt("Shutdown");
+
+        // CRITICAL FIX: Load animation state
+        this.hasExplodedThisCycle = tag.getBoolean("Exploded");
     }
 
     private boolean isStationary(Player player) {
