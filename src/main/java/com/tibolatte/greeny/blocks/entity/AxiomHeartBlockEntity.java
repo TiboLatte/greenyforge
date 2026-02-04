@@ -3,14 +3,16 @@ package com.tibolatte.greeny.blocks.entity;
 import com.tibolatte.greeny.blocks.AxiomHeartBlock;
 import com.tibolatte.greeny.blocks.HeartState;
 import com.tibolatte.greeny.mobs.AxiomGuardianEntity;
-import com.tibolatte.greeny.registry.BlockEntityRegistry;
-import com.tibolatte.greeny.registry.EntityRegistry;
-import com.tibolatte.greeny.registry.MobEffectRegistry;
-import com.tibolatte.greeny.registry.ParticleRegistry;
+import com.tibolatte.greeny.registry.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.*;
 import net.minecraft.world.level.Level;
@@ -30,7 +32,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-
 public class AxiomHeartBlockEntity extends BlockEntity {
 
     // =============================================================
@@ -46,6 +47,8 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     private static final float SCORE_GAIN_PER_TICK = 0.015f;
     private static final float SCORE_DECAY_PER_TICK = 0.05f;
     private static final float SCORE_PUNISHMENT = 0.1f;
+    private static final int MAX_CHARGES = 10;
+
 
     private static final double DETECTION_RADIUS = 20.0;
     private static final double KNOCKBACK_HORIZONTAL = 1.8;
@@ -58,6 +61,7 @@ public class AxiomHeartBlockEntity extends BlockEntity {
     private int pulseTicks = 0;
     private int angerTicks = 0;
     private boolean hasExplodedThisCycle = false;
+    private int repairCharges = 0;
 
     // Logic Tracking
     private int angerStrikes = 0;
@@ -160,6 +164,15 @@ public class AxiomHeartBlockEntity extends BlockEntity {
                 if (level.isClientSide) blockEntity.spawnGreenShockwave(pos);
                 else blockEntity.triggerPulseRewards(level, pos);
             }
+
+            if (blockEntity.pulseTicks % 20 == 0){
+                blockEntity.scanForFood(level, pos);
+            }
+
+            if (blockEntity.pulseTicks % 10 == 0){
+                blockEntity.scanForIntruders(level, pos);
+            }
+            if (!level.isClientSide) blockEntity.updateServerLogic(level, pos);
         }
 
         // 6. CONTINUOUS VISUALS
@@ -167,7 +180,7 @@ public class AxiomHeartBlockEntity extends BlockEntity {
             blockEntity.animateHeart(level, pos, isAngry);
             if (!isAngry) blockEntity.animatePlayerTethers(level, pos);
         } else {
-            if (!isAngry) blockEntity.updateServerLogic(level, pos);
+            // Server Logic handled above
         }
     }
 
@@ -189,9 +202,6 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         setChanged();
 
         // 2. START ANIMATION
-        // We REMOVED the check that stopped the function here.
-        // Now we let the animation flow play out, even if it's the final strike.
-
         boolean isBusyExploding = (this.pulseTicks >= PULSE_LOOP_SPEED) &&
                 (this.pulseTicks < PULSE_LOOP_SPEED + ANGER_BUILDUP_TIME);
 
@@ -241,6 +251,25 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         }
     }
 
+    private void scanForFood(Level level, BlockPos pos){
+        AABB searchBox = new AABB(pos).inflate(1.5);
+        List<ItemEntity> items = level.getEntitiesOfClass(ItemEntity.class, searchBox);
+        for (ItemEntity itemEntity : items){
+            ItemStack stack = itemEntity.getItem();
+            // CHECK: Is it Axiom Dust?
+            if (stack.is(ItemRegistry.AXIOM_DUST.get())) {
+                if (this.repairCharges < MAX_CHARGES){
+                    stack.shrink(1);
+                    this.repairCharges++;
+                    this.setChanged();
+
+                    level.playSound(null, pos, SoundEvents.RESPAWN_ANCHOR_CHARGE, SoundSource.BLOCKS, 1.0f, 1.5f);
+                    level.globalLevelEvent(2005,pos,0);
+                }
+            }
+        }
+    }
+
     // =============================================================
     //                  PHYSICS & LOGIC
     // =============================================================
@@ -263,9 +292,13 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         AABB area = new AABB(pos).inflate(DETECTION_RADIUS);
         List<Player> players = level.getEntitiesOfClass(Player.class, area);
 
+        // Track if anything changed this tick
+        boolean anyScoreChanged = false;
+
         for (Player player : players) {
             UUID id = player.getUUID();
             float score = serverResonance.getOrDefault(id, 0.0f);
+            float oldScore = score; // Snapshot for comparison
 
             boolean isSprinting = player.isSprinting();
             boolean isStill = isStationary(player);
@@ -277,13 +310,33 @@ public class AxiomHeartBlockEntity extends BlockEntity {
                     player.removeEffect(MobEffectRegistry.FOREST_MARK.get());
                 }
             } else if (isStill) {
-                score += SCORE_GAIN_PER_TICK;
+                // CAP at 50% for passive standing
+                if(score <= 0.5f){
+                    score += SCORE_GAIN_PER_TICK;
+                }
             } else {
                 score -= SCORE_DECAY_PER_TICK;
             }
 
             score = Math.max(0.0f, Math.min(1.0f, score));
             serverResonance.put(id, score);
+
+            // Check if value actually changed
+            if (score != oldScore) {
+                anyScoreChanged = true;
+            }
+        }
+
+        // --- THE FIX ---
+        // 1. If scores changed...
+        // 2. AND it has been 10 ticks (0.5 seconds)...
+        // 3. THEN send the packet.
+        if (anyScoreChanged) {
+            setChanged(); // Mark chunk as dirty (Save to disk)
+
+            if (level.getGameTime() % 10 == 0) {
+                level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+            }
         }
     }
 
@@ -299,6 +352,62 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         }
     }
 
+    // 2. REPAIRING (Called by Block Right-Click)
+    public void tryRepairItem(Player player) {
+        if (level == null || level.isClientSide) return;
+
+        UUID id = player.getUUID();
+        float resonance = serverResonance.getOrDefault(id, 0.0f);
+
+        // CHECK 1: Is the player a "Gardener" (Tier 2)?
+        if (resonance <= 0.5f) { // FIX: Changed < to <= to be strict
+            // Fail: Not trusted enough
+            level.playSound(null, worldPosition, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.5f, 0.5f);
+            return;
+        }
+        // CHECK 2: Does the heart have energy?
+        if (this.repairCharges <= 0) {
+            // Fail: Empty
+            level.playSound(null, worldPosition, SoundEvents.DISPENSER_FAIL, SoundSource.BLOCKS, 1.0f, 1.2f);
+            return;
+        }
+
+        // CHECK 3: Is item damaged?
+        ItemStack held = player.getMainHandItem();
+        if (held.isDamageableItem() && held.isDamaged()) {
+            // SUCCESS!
+            int repairAmount = held.getMaxDamage() / 4; // Repair 25%
+            held.setDamageValue(Math.max(0, held.getDamageValue() - repairAmount));
+
+            this.repairCharges--;
+            this.setChanged();
+            // Force sync so client sees charges drop
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+
+            level.playSound(null, worldPosition, SoundEvents.ANVIL_USE, SoundSource.BLOCKS, 0.5f, 1.5f);
+            level.playSound(null, worldPosition, SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.BLOCKS, 1.0f, 1.0f);
+        }
+    }
+
+    // 3. TREMORSENSE (Detecting Mobs on Roots)
+    private void scanForIntruders(Level level, BlockPos pos) {
+        AABB area = new AABB(pos).inflate(DETECTION_RADIUS); // 20 blocks
+        List<Monster> monsters = level.getEntitiesOfClass(Monster.class, area);
+
+        for (Monster mob : monsters) {
+            BlockPos mobPos = mob.blockPosition();
+            BlockState below = level.getBlockState(mobPos.below());
+
+            // Check if standing on Roots or Axiom Soil
+            if (below.is(BlockRegistry.ANCIENT_ROOT.get()) || below.is(BlockRegistry.AXIOM_SOIL.get())) {
+                // HIGHLIGHT THEM
+                if (!mob.hasEffect(MobEffects.GLOWING)) {
+                    mob.addEffect(new MobEffectInstance(MobEffects.GLOWING, 60, 0, false, false));
+                }
+            }
+        }
+    }
+
     private void spawnGuardianDefender(Level level, BlockPos pos) {
         Player targetPlayer = level.getNearestPlayer(pos.getX(), pos.getY(), pos.getZ(), 20.0, true);
         BlockPos searchCenter = (targetPlayer != null) ? targetPlayer.blockPosition() : pos;
@@ -306,16 +415,12 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         if (spawnPos == null) spawnPos = findValidSpawnSpot(level, pos);
         if (spawnPos == null) spawnPos = pos.above();
 
-        // FIX: Removed check logic, just used variable directly
         var guardian = EntityRegistry.AXIOM_GUARDIAN.get().create(level);
         if (guardian != null) {
             guardian.moveTo(spawnPos.getX() + 0.5, spawnPos.getY(), spawnPos.getZ() + 0.5, 0.0f, 0.0f);
-
-            // Assume it is the correct class because the Registry says so
             if (guardian instanceof AxiomGuardianEntity) {
                 ((AxiomGuardianEntity) guardian).setSummoned(true);
             }
-
             if (targetPlayer != null) guardian.setTarget(targetPlayer);
             level.addFreshEntity(guardian);
         }
@@ -374,9 +479,18 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         tag.putInt("Pulse", pulseTicks);
         tag.putInt("Strikes", angerStrikes);
         tag.putInt("Shutdown", shutdownTimer);
-
-        // CRITICAL FIX: Save animation state
         tag.putBoolean("Exploded", hasExplodedThisCycle);
+        tag.putInt("RepairCharges", repairCharges);
+
+        // SYNC FIX: Save the Trust Map
+        net.minecraft.nbt.ListTag resonanceList = new net.minecraft.nbt.ListTag();
+        for (Map.Entry<UUID, Float> entry : serverResonance.entrySet()) {
+            CompoundTag entryTag = new CompoundTag();
+            entryTag.putUUID("UUID", entry.getKey());
+            entryTag.putFloat("Score", entry.getValue());
+            resonanceList.add(entryTag);
+        }
+        tag.put("ResonanceMap", resonanceList);
     }
 
     @Override
@@ -386,9 +500,23 @@ public class AxiomHeartBlockEntity extends BlockEntity {
         this.pulseTicks = tag.getInt("Pulse");
         this.angerStrikes = tag.getInt("Strikes");
         this.shutdownTimer = tag.getInt("Shutdown");
-
-        // CRITICAL FIX: Load animation state
         this.hasExplodedThisCycle = tag.getBoolean("Exploded");
+        this.repairCharges = tag.getInt("RepairCharges");
+
+        // SYNC FIX: Load the Trust Map
+        if (tag.contains("ResonanceMap")) {
+            net.minecraft.nbt.ListTag resonanceList = tag.getList("ResonanceMap", 10);
+            serverResonance.clear();
+            clientResonance.clear();
+
+            for (int i = 0; i < resonanceList.size(); i++) {
+                CompoundTag entryTag = resonanceList.getCompound(i);
+                UUID id = entryTag.getUUID("UUID");
+                float score = entryTag.getFloat("Score");
+                serverResonance.put(id, score);
+                clientResonance.put(id, score); // Update client immediately
+            }
+        }
     }
 
     private boolean isStationary(Player player) {
@@ -468,20 +596,16 @@ public class AxiomHeartBlockEntity extends BlockEntity {
 
         for (Player player : players) {
             UUID id = player.getUUID();
+            // FIX: Just read the map. Don't simulate calculations.
             float visualScore = clientResonance.getOrDefault(id, 0.0f);
 
+            // Cut beam if holding weapon visually
             if (isHoldingTool(player)) {
-                visualScore = 0.0f;
                 spawnRejectionParticles(level, player);
-            } else if (isStationary(player)) {
-                visualScore += SCORE_GAIN_PER_TICK;
-            } else {
-                visualScore -= SCORE_DECAY_PER_TICK;
+                continue;
             }
 
-            visualScore = Math.max(0.0f, Math.min(1.0f, visualScore));
-            clientResonance.put(id, visualScore);
-
+            // Only show beam if score > 10%
             if (visualScore > 0.1f) {
                 spawnTetherParticles(level, pos, player, visualScore);
             }
@@ -529,6 +653,25 @@ public class AxiomHeartBlockEntity extends BlockEntity {
                     .setMotion(0, 0.005, 0)
                     .enableNoClip()
                     .spawn(level, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        }
+    }
+
+    // =============================================================
+    //                  PUBLIC API (For Events)
+    // =============================================================
+
+    /**
+     * Called by external events (Planting, Feeding) to instantly boost trust.
+     */
+    public void boostResonance(UUID playerId, float amount) {
+        float current = serverResonance.getOrDefault(playerId, 0.0f);
+        float newScore = Math.min(1.0f, current + amount);
+        serverResonance.put(playerId, newScore);
+
+        // Mark block for update so logic (like Tethers) refreshes immediately
+        this.setChanged();
+        if (level != null) {
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
         }
     }
 }

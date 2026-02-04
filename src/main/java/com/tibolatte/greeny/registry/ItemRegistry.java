@@ -16,4 +16,6 @@ public class ItemRegistry {
 
     public static final RegistryObject<Item> ANCIENT_ROOT_ITEM = ITEMS.register("ancient_root",
             () -> new BlockItem(BlockRegistry.ANCIENT_ROOT.get(), new Item.Properties()));
+
+    public static final RegistryObject<Item> AXIOM_DUST = ITEMS.register("axiom_dust", () -> new Item(new Item.Properties()));
 }

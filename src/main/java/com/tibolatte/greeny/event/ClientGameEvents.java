@@ -18,8 +18,8 @@ import team.lodestar.lodestone.systems.particle.data.GenericParticleData;
 import team.lodestar.lodestone.systems.particle.data.color.ColorParticleData;
 
 import java.awt.*;
-
 // Note: bus = Bus.FORGE because we are listening to game ticks, not registration
+
 @Mod.EventBusSubscriber(modid = Greeny.MODID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class ClientGameEvents {
 
